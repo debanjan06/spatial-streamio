@@ -1,18 +1,18 @@
-import threading
 import queue
+import threading
 import time
 import numpy as np
 
 
 class AsynchronousBufferPipeline:
-    """
-    Manages background prefetching threads to load spatial data slices
-    into memory ahead of execution, preventing hardware starvation loops.
+    """Manages background prefetching threads to load spatial data slices into
+
+    memory ahead of execution, preventing hardware starvation loops.
     """
 
     def __init__(self, reader, batch_size, queue_size=2, timeout=10.0):
-        """
-        Parameters:
+        """Parameters:
+
         - reader: An instance of MemoryMappedSpatialReader
         - batch_size: Number of points to stream per execution step
         - queue_size: Max number of pre-staged lookahead batches to keep in RAM
@@ -26,13 +26,20 @@ class AsynchronousBufferPipeline:
         self.running = False
         self.worker_thread = None
 
+        # INITIALIZATION FIX: Setup the threading Event primitive
+        self.stop_event = threading.Event()
+
         # Calculate indices to partition the dataset into clean blocks
         self.indices = np.arange(0, self.reader.num_points, self.batch_size)
         self.current_step = 0
 
     def _prefetch_loop(self):
-        """Background worker target loop that runs independently of the main execution loop."""
-        while self.running:
+        """Background worker target loop that runs independently of the main
+
+        execution loop.
+        """
+        # THREAD SIGNAL FIX: Evaluate the thread event state flag instead of a raw boolean
+        while not self.stop_event.is_set():
             if self.current_step >= len(self.indices):
                 # Epoch Completed: Put a None sentinel token into the queue to signal termination
                 try:
@@ -65,12 +72,13 @@ class AsynchronousBufferPipeline:
                 time.sleep(0.1)
             except Exception as e:
                 print(f"Pipeline prefetch worker encountered an error: {e}")
-                self.running = False
+                self.stop_event.set()
 
     def start(self):
         """Spins up the background prefetch worker thread daemon."""
         if not self.running:
             self.running = True
+            self.stop_event.clear()  # Ensure the signal state is clear on start
             self.worker_thread = threading.Thread(
                 target=self._prefetch_loop, daemon=True
             )
@@ -78,8 +86,8 @@ class AsynchronousBufferPipeline:
             print("Asynchronous prefetch worker thread successfully running.")
 
     def next_batch(self):
-        """
-        Retrieves the next pre-staged data buffer block from the queue.
+        """Retrieves the next pre-staged data buffer block from the queue.
+
         Returns None when the epoch ends.
         """
         if not self.running:
@@ -94,7 +102,10 @@ class AsynchronousBufferPipeline:
             )
 
     def stop(self):
-        """Signals the background prefetch worker to halt and joins the execution thread."""
+        """Signals the background prefetch worker to halt and joins the
+
+        execution thread.
+        """
         self.stop_event.set()
         if hasattr(self, "worker_thread") and self.worker_thread.is_alive():
             # Wake up thread if it is blocked waiting for an empty queue slot
@@ -104,4 +115,5 @@ class AsynchronousBufferPipeline:
                 pass
 
             self.worker_thread.join(timeout=2.0)
+            self.running = False
             print("Prefetch worker thread stopped cleanly.")
